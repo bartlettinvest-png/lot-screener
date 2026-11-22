@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Lot Screener</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -24,6 +24,7 @@
   --accent:#7fbf9b; --accent-ink:#0f1512;
   --pass:#7fcf9c; --pass-bg:#1d3326; --flag:#e2b955; --flag-bg:#3a3119; --fail:#f08a7e; --fail-bg:#3d2220; --skip:#9aa59e; --skip-bg:#252c28; color-scheme:dark}
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.5}
 .wrap{max-width:720px;margin:0 auto;padding-block:20px 48px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:18px}
 header h1{font-size:1.6rem;margin:0;letter-spacing:-.01em;text-wrap:balance}
@@ -119,6 +120,11 @@ details ul{margin:8px 0 0;padding-left:18px;color:var(--muted);font-size:.9rem}
   <section class="card" id="result" aria-live="polite"></section>
 
   <details class="card">
+    <summary>Data sources this session</summary>
+    <ul id="svclog"><li>Nothing looked up yet.</li></ul>
+  </details>
+
+  <details class="card">
     <summary>How each check is scored</summary>
     <ul id="rules"></ul>
   </details>
@@ -206,9 +212,26 @@ const num = v => { const n = parseFloat(String(v || "").replace(/[$,\s]/g, ""));
 const yes = v => /^(Y|YES|TRUE|1)$/i.test(String(v ?? "").trim());
 const store = {get(k){try{return localStorage.getItem(k)}catch{return null}}, set(k,v){try{localStorage.setItem(k,v)}catch{}}};
 
+const LOG = {};
+const SVC_NAME = u => u.includes("tnmap") ? "State parcels" : u.includes("StatewideSoils") ? "State soils" : u.includes("TN_Cities") ? "City limits" :
+  u.includes("hazards.fema") ? "FEMA flood" : u.includes("epqs") ? "USGS elevation points" : u.includes("3DEPElevation") ? "USGS lidar surface" :
+  u.includes("geocode") ? "Address lookup" : u.includes("sdmdataaccess") ? "USDA septic rating" : "Other";
+function logSvc(url, ok, ms, err) {
+  const k = SVC_NAME(url), e = LOG[k] || (LOG[k] = {n:0, ok:0, ms:0, err:""});
+  e.n++; if (ok) e.ok++; e.ms += ms; if (!ok && err) e.err = err;
+  const el = $("svclog"); if (!el) return;
+  el.innerHTML = Object.entries(LOG).map(([k, v]) => `<li>${esc(k)}: ${v.ok} of ${v.n} answered, ${(v.ms / v.n / 1000).toFixed(1)} s each${v.err ? ` (last error: ${esc(v.err)})` : ""}</li>`).join("");
+}
 async function call(url, params, {method="GET", timeout=20000} = {}) {
-  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), timeout);
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), timeout), t0 = performance.now();
   try {
+    const j = await call0(url, params, method, ctl);
+    logSvc(url, true, performance.now() - t0); return j;
+  } catch (e) { logSvc(url, false, performance.now() - t0, e.name === "AbortError" ? "timed out" : e.message); throw e; }
+  finally { clearTimeout(t); }
+}
+async function call0(url, params, method, ctl) {
+  {
     const body = new URLSearchParams(params);
     const res = method === "POST"
       ? await fetch(url, {method:"POST", body, signal:ctl.signal})
@@ -217,7 +240,7 @@ async function call(url, params, {method="GET", timeout=20000} = {}) {
     const j = await res.json();
     if (j && j.error) throw new Error(j.error.message || "service error");
     return j;
-  } finally { clearTimeout(t); }
+  }
 }
 const arc = (url, p) => call(url, {f:"json", ...p}, {method:"POST"});
 
@@ -259,8 +282,16 @@ function parseInput(text) {
   const t = text.trim();
   const ll = t.match(/(3[4-7]\.\d+)\s*,\s*(-8[1-9]\.\d+)/);
   if (ll) return {kind:"point", lat:+ll[1], lon:+ll[2]};
-  const g = t.toUpperCase().match(/\b(\d{6}[A-Z]?)\s+([A-Z])?\s*(\d{5})\b/);
-  if (g) return {kind:"gislink", map:g[1], group:g[2]||"", parcel:g[3]};
+  const u = t.toUpperCase().replace(/[-_,/]+/g, " ").replace(/\s+/g, " ").trim();
+  const g = u.match(/\b(\d{6}[A-Z]?)\s+([A-Z])?\s*(\d{5})\b/);
+  if (g) return {kind:"gislink", cty:g[1].slice(0, 3), map:g[1].slice(3), group:g[2]||"", parcel:g[3]};
+  // County record style: [county no.] control map, [group], parcel, [special interest], e.g. "082 040.00", "071 082 A 040.00 000"
+  const c = u.replace(/\b(CONTROL MAP|MAP|PARCEL ID|PARCEL|GROUP|SPECIAL INTEREST)\b:?/g, " ").replace(/\s+/g, " ").trim().match(/^(?:(\d{3})\s+)?(\d{3}[A-Z]?)\s+(?:([A-Z])\s+)?(\d{1,3}(?:\.\d{1,2})?|\d{5})(?:\s+(\d{3}))?$/);
+  if (c) {
+    let par = c[4];
+    if (par.length === 5 && !par.includes(".")) {} else { const [w, d = ""] = par.split("."); par = w.padStart(3, "0") + d.padEnd(2, "0"); }
+    return {kind:"gislink", cty:c[1] || "", map:c[2], group:c[3] || "", parcel:par};
+  }
   const sfx = "RD|ROAD|ST|STREET|AVE|AVENUE|DR|DRIVE|LN|LANE|CT|COURT|CIR|CIRCLE|HWY|HIGHWAY|PIKE|PK|LOOP|WAY|TRL|TRAIL|BLVD|PL|PLACE|CV|COVE|PKWY|TER|RUN|PT|POINT|XING";
   const re = new RegExp("\\b(\\d{1,6})\\s+((?:[NSEW]\\.?\\s+)?[A-Za-z0-9'. -]{1,40}?\\b(?:" + sfx + ")\\b\\.?)([^\\n]*)", "i");
   const m = t.match(re);
@@ -279,9 +310,17 @@ async function findParcels(inp, county) {
     return j.features || [];
   }
   if (inp.kind === "gislink") {
-    const like = `${inp.map}%${inp.group ? inp.group + "%" : ""}${inp.parcel}%`;
-    const j = await arc(SVC.parcels, {...base, where:`GISLINK LIKE '${sq(like)}'${cty}`});
-    return j.features || [];
+    // GISLINK is county no. + control map, then group and parcel, e.g. "018100N D 01000"
+    const grp = inp.group ? inp.group + "%" : "", tries = [
+      `${inp.cty || "___"}${inp.map}${/[A-Z]$/.test(inp.map) ? " " : ""}%${grp}${inp.parcel}%`,
+      `%${inp.map}%${grp}${inp.parcel}%`];
+    for (const like of tries) {
+      const j = await arc(SVC.parcels, {...base, where:`GISLINK LIKE '${sq(like)}'${inp.cty ? "" : cty}`});
+      let fs = j.features || [];
+      if (!inp.group && fs.length > 1) { const plain = fs.filter(f => !/^\S+\s+[A-Z]\s/.test(f.attributes.GISLINK || "")); if (plain.length) fs = plain; }
+      if (fs.length) return fs;
+    }
+    return [];
   }
   if (inp.num && inp.street) {
     const words = inp.street.split(/\s+/);
@@ -298,7 +337,7 @@ async function findParcels(inp, county) {
 // ---------- what you'd build ----------
 function plan() {
   if (mode === "flex") {
-    const maxTry = Math.min(20, Math.max(1, Math.round(num($("maxb").value) || 10))), slab = num($("slab").value) || 6000, n = maxTry;
+    const maxTry = Math.min(30, Math.max(1, Math.round(num($("maxb").value) || 10))), slab = num($("slab").value) || 6000, n = maxTry;
     const W = CFG.flexSlabWidth, Ls = slab / W, m = CFG.flexPadMargin;
     return {flex:true, n, maxTry, slab, slabW:W, slabL:Ls, L:Ls + 2 * m, W:W + 2 * m, okFt:CFG.flexPadOkFt, failFt:CFG.flexPadFailFt,
       step:10, gridTarget:700, cost:num($("cost").value), price:num($("price").value),
@@ -308,6 +347,12 @@ function plan() {
 }
 
 // ---------- the checks ----------
+let stageBase = "", stageNote = "";
+function stage(note) {
+  if (note !== undefined) stageNote = note;
+  if (!stageBase) return;
+  $("status").textContent = `${stageBase}${stageNote ? ": " + stageNote : ""}…`;
+}
 async function screen(f, P) {
   const a = f.attributes, ring = f.geometry.rings[0];
   if (P.flex) { const ba = a.LU_ACRES ? Math.floor(a.LU_ACRES * 43560 * CFG.flexCoverage / P.slab) : 1; P = {...P, byAcres:ba, n:P.maxTry}; }
@@ -319,12 +364,17 @@ async function screen(f, P) {
   const [water, sewer] = ws.split("/").map(s => (s||"").trim());
   const onSewer = /public/i.test(sewer || "");
 
+  const pending = new Set(["flood", "soils", "city limits", "lidar"]);
+  const track = (name, pr) => pr.finally(() => { pending.delete(name); stage(); });
+  const limit = (pr, ms) => { let t; return Promise.race([pr, new Promise((_, no) => { t = setTimeout(() => no(new Error("took too long")), ms); })]).finally(() => clearTimeout(t)); };
+  stageBase = "Checking"; stage();
   const [flood, soils, city, elev] = await Promise.allSettled([
-    arc(SVC.flood, {...geo, outFields:"FLD_ZONE,ZONE_SUBTY,SFHA_TF"}),
-    arc(SVC.soils, {...geo, outFields:"MUSYM,MUKEY,COMPNAME,CAPABILITYCLASS"}),
-    arc(SVC.cities, {geometry:`${lon},${lat}`, geometryType:"esriGeometryPoint", inSR:"4326", spatialRel:"esriSpatialRelIntersects", outFields:"NAME,COUNTY", returnGeometry:"false"}),
-    terrain(ring, P)
+    track("flood", arc(SVC.flood, {...geo, outFields:"FLD_ZONE,ZONE_SUBTY,SFHA_TF"})),
+    track("soils", arc(SVC.soils, {...geo, outFields:"MUSYM,MUKEY,COMPNAME,CAPABILITYCLASS"})),
+    track("city limits", arc(SVC.cities, {geometry:`${lon},${lat}`, geometryType:"esriGeometryPoint", inSR:"4326", spatialRel:"esriSpatialRelIntersects", outFields:"NAME,COUNTY", returnGeometry:"false"})),
+    track("lidar", limit(terrain(ring, P), 150000))
   ]);
+  stageBase = "";
 
   const checks = [];
   const acres = a.LU_ACRES;
@@ -470,10 +520,11 @@ async function screen(f, P) {
   };
 }
 
+let lidarDown = null;
 // Elevations in feet for [lon,lat] points: lidar surface first, single-point service as backup
-async function elevations(lonlats) {
+async function elevations(lonlats, cap = 60) {
   const out = new Array(lonlats.length).fill(NaN);
-  try {
+  if (lidarDown !== true) try {
     for (let i = 0; i < lonlats.length; i += 400) {
       const chunk = lonlats.slice(i, i + 400);
       const j = await call(SVC.dem, {geometry:JSON.stringify({points:chunk, spatialReference:{wkid:4326}}), geometryType:"esriGeometryMultipoint",
@@ -481,13 +532,15 @@ async function elevations(lonlats) {
       (j.samples || []).forEach((s, k) => { const v = parseFloat(s.value); const at = i + (Number.isInteger(s.locationId) ? s.locationId : k);
         if (isFinite(v) && v > -300) out[at] = v * 3.28084; });
     }
-    if (out.filter(isFinite).length >= lonlats.length * 0.8) return {z:out, src:"lidar"};
+    if (out.filter(isFinite).length >= lonlats.length * 0.8) { lidarDown = false; return {z:out, src:"lidar"}; }
   } catch {}
+  if (lidarDown === null) lidarDown = true;
+  stage("USGS lidar surface didn't answer, using spot elevations");
   out.fill(NaN); let k = 0;
-  const todo = lonlats.length > 400 ? lonlats.map((p, i) => i).filter(i => i % Math.ceil(lonlats.length / 400) === 0) : lonlats.map((p, i) => i);
+  const todo = lonlats.map((p, i) => i).filter(i => lonlats.length <= cap || i % Math.ceil(lonlats.length / cap) === 0);
   async function worker() { while (k < todo.length) { const i = todo[k++];
     try { const j = await call(SVC.elev, {x:lonlats[i][0], y:lonlats[i][1], units:"Feet", wkid:"4326"}); const v = +j.value; if (isFinite(v) && v > -1000) out[i] = v; } catch {} } }
-  await Promise.all(Array.from({length:8}, worker));
+  await Promise.all(Array.from({length:12}, worker));
   return {z:out, src:"points"};
 }
 
@@ -505,6 +558,7 @@ async function terrain(ring, P) {
   for (let x = Math.min(...xs) + sp / 2; x < Math.max(...xs); x += sp)
     for (let y = Math.min(...ys) + sp / 2; y < Math.max(...ys); y += sp) if (inside([x, y], poly)) grid.push([x, y]);
   if (grid.length < 4) grid.push([0, 0], ...poly.slice(0, -1).map(p => [p[0] * 0.8, p[1] * 0.8]));
+  stage("Reading lidar slope across the lot");
   const g = await elevations(grid.map(toLL));
   const pts = grid.map((p, i) => ({x:p[0], y:p[1], z:g.z[i]})).filter(p => isFinite(p.z));
   if (pts.length < 4) return null;
@@ -531,11 +585,12 @@ async function terrain(ring, P) {
   const fine = [], owner = [];
   chosen.forEach((c, k) => { const co = Math.cos(c.t), si = Math.sin(c.t);
     for (let u = -L/2 + P.step/2; u < L/2; u += P.step) for (let v = -W/2 + P.step/2; v < W/2; v += P.step) { fine.push([c.cx + u * co - v * si, c.cy + u * si + v * co]); owner.push(k); } });
-  const f = await elevations(fine.map(toLL));
+  stage(`Measuring dirt work on ${chosen.length} pad${chosen.length === 1 ? "" : "s"}`);
+  const f = await elevations(fine.map(toLL), Math.min(240, Math.max(60, chosen.length * 8)));
   const pads = chosen.map((c, k) => {
     const fz = f.z.filter((z, i) => owner[i] === k && isFinite(z)), all = owner.filter(o => o === k).length;
     const [plon, plat] = toLL([c.cx, c.cy]);
-    if (fz.length < all * 0.6) return {ok:false, fits:c.fits, lon:plon, lat:plat};
+    if (fz.length < (f.src === "lidar" ? all * 0.6 : 3)) return {ok:false, fits:c.fits, lon:plon, lat:plat};
     const cell = P.step * P.step * (all / fz.length), mean = fz.reduce((a, b) => a + b, 0) / fz.length;
     const top = Math.max(...fz), low = Math.min(...fz);
     let cut = 0, fill = 0, up = 0;
