@@ -1,0 +1,684 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Lot Screener</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: one narrow column, input on top, verdict then a check list read like a site-visit sheet */
+:root{
+  --bg:#f3f4f0; --surface:#ffffff; --ink:#1d2420; --muted:#5d6861; --line:#d9ddd6;
+  --accent:#2f5d46; --accent-ink:#ffffff;
+  --pass:#2e7d4f; --pass-bg:#e4f2e9; --flag:#9a6a00; --flag-bg:#fbf1d6; --fail:#b23a2e; --fail-bg:#f9e3e0; --skip:#6b7470; --skip-bg:#eceeea;
+  --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif; --mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#141917; --surface:#1c2320; --ink:#e7ebe7; --muted:#9aa59e; --line:#2f3833;
+  --accent:#7fbf9b; --accent-ink:#0f1512;
+  --pass:#7fcf9c; --pass-bg:#1d3326; --flag:#e2b955; --flag-bg:#3a3119; --fail:#f08a7e; --fail-bg:#3d2220; --skip:#9aa59e; --skip-bg:#252c28; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#141917; --surface:#1c2320; --ink:#e7ebe7; --muted:#9aa59e; --line:#2f3833;
+  --accent:#7fbf9b; --accent-ink:#0f1512;
+  --pass:#7fcf9c; --pass-bg:#1d3326; --flag:#e2b955; --flag-bg:#3a3119; --fail:#f08a7e; --fail-bg:#3d2220; --skip:#9aa59e; --skip-bg:#252c28; color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.5}
+.wrap{max-width:720px;margin:0 auto;padding-block:20px 48px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:18px}
+header h1{font-size:1.6rem;margin:0;letter-spacing:-.01em;text-wrap:balance}
+header p{margin:4px 0 0;color:var(--muted)}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:16px;display:flex;flex-direction:column;gap:12px;min-width:0}
+label{font-size:.78rem;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+textarea,select,input{width:100%;font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px 12px}
+textarea{min-height:84px;resize:vertical}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:end}
+.row>div{flex:1 1 150px;display:flex;flex-direction:column;gap:6px;min-width:0}
+.seg{display:flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{flex:1;border-radius:0;background:var(--bg);color:var(--ink);font-weight:600}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink)}
+button{font:inherit;font-weight:600;border:0;border-radius:8px;padding:11px 18px;background:var(--accent);color:var(--accent-ink);cursor:pointer}
+button.ghost{background:transparent;color:var(--accent);border:1px solid var(--accent)}
+button:disabled{opacity:.55;cursor:default}
+button:focus-visible,textarea:focus-visible,select:focus-visible,input:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.hint{font-size:.85rem;color:var(--muted);margin:0}
+.banner{border-left:3px solid var(--flag);background:var(--flag-bg);padding:10px 12px;border-radius:6px;font-size:.9rem}
+.status{font-size:.9rem;color:var(--muted);min-height:1.2em}
+.verdict{display:flex;flex-direction:column;gap:4px}
+.verdict .tag{font-family:var(--mono);font-size:.75rem;color:var(--muted)}
+.verdict h2{margin:0;font-size:1.35rem;text-wrap:balance}
+.verdict.pass h2{color:var(--pass)} .verdict.flag h2{color:var(--flag)} .verdict.fail h2{color:var(--fail)}
+.facts{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px 16px;margin:0}
+.facts div{min-width:0}
+.facts dt{font-size:.72rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
+.facts dd{margin:2px 0 0;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.mono{font-family:var(--mono);font-size:.9em}
+.checks{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.checks li{display:grid;grid-template-columns:64px 1fr;gap:12px;padding:12px 0;border-top:1px solid var(--line)}
+.checks li:first-child{border-top:0}
+.chip{font-size:.72rem;font-weight:700;letter-spacing:.05em;text-transform:uppercase;border-radius:999px;padding:3px 0;text-align:center;align-self:start}
+.chip.pass{color:var(--pass);background:var(--pass-bg)} .chip.flag{color:var(--flag);background:var(--flag-bg)} .chip.fail{color:var(--fail);background:var(--fail-bg)} .chip.skip{color:var(--skip);background:var(--skip-bg)}
+.checks h3{margin:0;font-size:1rem}
+.checks p{margin:2px 0 0;color:var(--muted);font-size:.92rem;overflow-wrap:anywhere}
+.checks .src{font-size:.78rem;margin-top:4px}
+.links{display:flex;flex-wrap:wrap;gap:8px 16px}
+a{color:var(--accent)}
+details summary{cursor:pointer;font-weight:600}
+details ul{margin:8px 0 0;padding-left:18px;color:var(--muted);font-size:.9rem}
+.picker{display:flex;flex-direction:column;gap:6px}
+.picker button{background:var(--bg);color:var(--ink);border:1px solid var(--line);text-align:left;font-weight:500;font-variant-numeric:tabular-nums}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Lot Screener</h1>
+    <p>Buildability check for Upper Cumberland land: houses or flex-space sites. Flood, soils, lidar slope and pads, dirt work, zoning, road access and land cost against build cost.</p>
+  </header>
+
+  <div class="banner" id="preview" hidden>Live lookups are off in this copy, so it shows a saved example. The same page runs live checks once it's hosted on its own web address.</div>
+
+  <form class="card" id="form" autocomplete="off">
+    <div class="seg" role="group" aria-label="What you'd build">
+      <button type="button" id="m-sf" aria-pressed="true">House</button>
+      <button type="button" id="m-flex" aria-pressed="false">Flex space</button>
+    </div>
+    <div class="row">
+      <div style="flex-basis:100%">
+        <label for="q">Address, parcel ID, map point or pasted email</label>
+        <textarea id="q" placeholder="133 Big Lick Rd, Crossville TN&#10;018100N D 01000&#10;35.9537, -85.0212"></textarea>
+      </div>
+      <div>
+        <label for="county">County</label>
+        <select id="county">
+          <option value="">Any county</option>
+          <option>CUMBERLAND</option><option>PUTNAM</option><option>WHITE</option><option>OVERTON</option><option>DEKALB</option><option>JACKSON</option><option>FENTRESS</option><option>VAN BUREN</option><option>WARREN</option><option>SMITH</option>
+        </select>
+      </div>
+      <div>
+        <label for="price">Asking price ($)</label>
+        <input id="price" inputmode="numeric" placeholder="County land value if blank">
+      </div>
+    </div>
+    <div class="row" id="flexrow" hidden>
+      <div><label for="nb">Buildings</label><input id="nb" inputmode="numeric" value="5"></div>
+      <div><label for="slab">Slab each (sq ft)</label><input id="slab" inputmode="numeric" value="6000"></div>
+      <div><label for="cost">Build cost ($/sq ft)</label><input id="cost" inputmode="decimal" placeholder="Your number"></div>
+    </div>
+    <div class="row">
+      <div style="flex:0 0 auto"><button id="go" type="submit">Screen this lot</button></div>
+      <div style="flex:0 0 auto"><button id="find" type="button" class="ghost">Find sites</button></div>
+    </div>
+    <p class="hint" id="modehint">Paste a whole wholesaler email and it pulls the first street address out of it. Find sites lists vacant parcels in the county you pick.</p>
+    <div class="status" id="status" role="status" aria-live="polite"></div>
+    <div class="picker" id="picker" hidden></div>
+  </form>
+
+  <section class="card" id="result" aria-live="polite"></section>
+
+  <details class="card">
+    <summary>How each check is scored</summary>
+    <ul id="rules"></ul>
+  </details>
+</div>
+
+<script>
+// ---------- Your rules (change these numbers to fit how you build) ----------
+const CFG = {
+  sewerMinAcres: 0.15,   // house on public sewer: below this is a check
+  septicMinAcres: 1.0,   // house without sewer: below this is a check
+  septicFailAcres: 0.5,  // house without sewer: below this fails
+  slopeFlag: 12,         // % grade that starts to cost money
+  slopeFail: 25,         // % grade that usually kills a small-builder lot
+  floodFailPct: 50,      // % of lot in the 100-year floodplain that fails it
+  padLength: 60,         // house pad, ft: a 40x30 house plus 10 ft all round
+  padWidth: 50,
+  padOkFt: 3,            // house pad cut or fill depth that's routine
+  padFailFt: 8,          // depth that usually means engineered fill or a retaining wall
+  onsiteRate: 6,         // $ per cubic yard to cut and place dirt on site (a guess; set yours)
+  importRate: 25,        // $ per cubic yard for fill trucked in, spread and compacted (a guess; set yours)
+  fillShrink: 1.2,       // extra dirt needed because fill compacts
+
+  // Flex space
+  flexCounties: ["PUTNAM", "WHITE", "OVERTON", "CUMBERLAND"],
+  flexSlabWidth: 50,     // slab is this wide; length comes from the slab size you type
+  flexPadMargin: 10,     // ft of level ground around each slab
+  flexCoverage: 0.25,    // share of the site under buildings once drives, parking and setbacks are in
+  flexPadOkFt: 2,        // slabs want flat ground: cut or fill above this is a check
+  flexPadFailFt: 6,
+  flexSitePerBldg: 15000,// drive, parking, utilities per building (a guess; set yours)
+  flexAadt: 3000,        // daily traffic count that counts as a corridor road
+  landShareOk: 0.15,     // land + dirt as a share of total project cost: clear at or under this
+  landShareFail: 0.25,   //   and fails over this
+  findMaxAcres: 25
+};
+
+// ---------- Public data services ----------
+const SVC = {
+  parcels: "https://tnmap.tn.gov/ArcGIS/rest/services/ENVIRONMENTAL/COMPTROLLER_OLG_LANDUSE/MapServer/2/query",
+  soils:   "https://geoviewer.cot.tn.gov/arcgis/rest/services/GeoViewer/StatewideSoils/MapServer/0/query",
+  cities:  "https://geoviewer.cot.tn.gov/arcgis/rest/services/GeoViewer/TN_Cities/MapServer/0/query",
+  flood:   "https://hazards.fema.gov/arcgis/rest/services/public/NFHL/MapServer/28/query",
+  elev:    "https://epqs.nationalmap.gov/v1/json",
+  dem:     "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer/getSamples",
+  geocode: "https://geocode.arcgis.com/arcgis/rest/services/World/GeocodeServer/findAddressCandidates",
+  sda:     "https://sdmdataaccess.sc.egov.usda.gov/Tabular/post.rest"
+};
+
+// Zoning notes by city (from each city's own pages, Nov 2026)
+const ZONING = {
+  "CROSSVILLE": {s:"pass", t:"Crossville has no use or density zoning. Its ordinances cover the airport, floodplains, signs and mobile homes, plus subdivision and building permits."},
+  "COOKEVILLE": {s:"flag", t:"Cookeville is zoned. Check the district on the city's zoning map before you offer.", link:"https://cookeville-tn.gov/320/Zoning-Map"},
+};
+const COUNTY_ZONING = {
+  "PUTNAM": {s:"pass", t:"No county zoning outside city limits. County subdivision and floodplain rules still apply."}
+};
+
+// ---------- Saved example (state parcel layer, April 2025 roll) ----------
+const EXAMPLE = {
+  example: true,
+  title: "Vacant 0.41-acre lot, Crossville",
+  facts: {gislink:"018100N D 01000", county:"Cumberland", city:"Crossville", acres:0.41, landValue:4800, use:"Vacant land (county class 51)"},
+  links: [{t:"County assessment record", u:"https://www.assessment.cot.tn.gov/TPAD/Parcel/GIS?GISlink=018100N%20D%2001000"}],
+  checks: [
+    {s:"pass", h:"Size", d:"0.41 acres on the county map, on public sewer.", src:"State parcel layer"},
+    {s:"pass", h:"Water and sewer", d:"County record: public water, public sewer. Public electric and natural gas.", src:"State parcel layer"},
+    {s:"pass", h:"Flood", d:"State layer shows no part of the lot in the floodplain.", src:"State parcel layer (FEMA check runs live)"},
+    {s:"skip", h:"Soils", d:"On sewer, so soils only matter for footings. Not run in this saved example.", src:""},
+    {s:"skip", h:"Slope", d:"Not run in this saved example.", src:""},
+    {s:"skip", h:"Building pad and dirt work", d:"Not run in this saved example. Live, it finds the flattest spot for a house pad on the lidar surface and estimates the cut, fill and cost to level it.", src:""},
+    {s:"pass", h:"Zoning", d:ZONING.CROSSVILLE.t, src:"City of Crossville"},
+    {s:"flag", h:"Road access", d:"No street address on the county record. Confirm frontage on the plat.", src:"State parcel layer"}
+  ]
+};
+
+// ---------- helpers ----------
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const sq = s => String(s).replace(/'/g, "''");
+const money = n => n == null || !isFinite(n) ? "—" : "$" + Math.round(n).toLocaleString();
+const rough = n => { const m = Math.pow(10, Math.max(1, Math.floor(Math.log10(Math.max(n, 1))) - 1)); return "$" + (Math.round(n / m) * m).toLocaleString(); };
+const title = s => String(s||"").toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+const num = v => { const n = parseFloat(String(v || "").replace(/[$,\s]/g, "")); return isFinite(n) && n > 0 ? n : null; };
+const yes = v => /^(Y|YES|TRUE|1)$/i.test(String(v ?? "").trim());
+const store = {get(k){try{return localStorage.getItem(k)}catch{return null}}, set(k,v){try{localStorage.setItem(k,v)}catch{}}};
+
+async function call(url, params, {method="GET", timeout=20000} = {}) {
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), timeout);
+  try {
+    const body = new URLSearchParams(params);
+    const res = method === "POST"
+      ? await fetch(url, {method:"POST", body, signal:ctl.signal})
+      : await fetch(url + "?" + body.toString(), {signal:ctl.signal});
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const j = await res.json();
+    if (j && j.error) throw new Error(j.error.message || "service error");
+    return j;
+  } finally { clearTimeout(t); }
+}
+const arc = (url, p) => call(url, {f:"json", ...p}, {method:"POST"});
+
+function centroid(ring) {
+  let a=0, x=0, y=0;
+  for (let i=0, j=ring.length-1; i<ring.length; j=i++) {
+    const [x0,y0]=ring[j], [x1,y1]=ring[i], f=x0*y1-x1*y0;
+    a+=f; x+=(x0+x1)*f; y+=(y0+y1)*f;
+  }
+  if (Math.abs(a) < 1e-12) { const n=ring.length; return [ring.reduce((s,p)=>s+p[0],0)/n, ring.reduce((s,p)=>s+p[1],0)/n]; }
+  a*=0.5; return [x/(6*a), y/(6*a)];
+}
+function thin(ring, max) {
+  if (ring.length <= max) return ring;
+  const step = ring.length / max, out = [];
+  for (let i=0; i<max; i++) out.push(ring[Math.floor(i*step)]);
+  out.push(out[0]); return out;
+}
+function inside([x, y], poly) {
+  let c = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const [xi, yi] = poly[i], [xj, yj] = poly[j];
+    if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) c = !c;
+  }
+  return c;
+}
+// do two convex 4-corner boxes overlap (separating axis test)
+function boxesOverlap(a, b) {
+  for (const poly of [a, b]) for (let i = 0; i < 4; i++) {
+    const [x1, y1] = poly[i], [x2, y2] = poly[(i + 1) % 4], nx = y2 - y1, ny = x1 - x2;
+    const pa = a.map(p => p[0] * nx + p[1] * ny), pb = b.map(p => p[0] * nx + p[1] * ny);
+    if (Math.max(...pa) <= Math.min(...pb) || Math.max(...pb) <= Math.min(...pa)) return false;
+  }
+  return true;
+}
+
+// ---------- reading the input ----------
+function parseInput(text) {
+  const t = text.trim();
+  const ll = t.match(/(3[4-7]\.\d+)\s*,\s*(-8[1-9]\.\d+)/);
+  if (ll) return {kind:"point", lat:+ll[1], lon:+ll[2]};
+  const g = t.toUpperCase().match(/\b(\d{6}[A-Z]?)\s+([A-Z])?\s*(\d{5})\b/);
+  if (g) return {kind:"gislink", map:g[1], group:g[2]||"", parcel:g[3]};
+  const sfx = "RD|ROAD|ST|STREET|AVE|AVENUE|DR|DRIVE|LN|LANE|CT|COURT|CIR|CIRCLE|HWY|HIGHWAY|PIKE|PK|LOOP|WAY|TRL|TRAIL|BLVD|PL|PLACE|CV|COVE|PKWY|TER|RUN|PT|POINT|XING";
+  const re = new RegExp("\\b(\\d{1,6})\\s+((?:[NSEW]\\.?\\s+)?[A-Za-z0-9'. -]{1,40}?\\b(?:" + sfx + ")\\b\\.?)([^\\n]*)", "i");
+  const m = t.match(re);
+  if (m) return {kind:"address", num:m[1], street:m[2].replace(/\./g,"").trim().toUpperCase(), line:(m[1]+" "+m[2]+m[3]).trim()};
+  if (t) return {kind:"address", line:t};
+  return null;
+}
+
+const PARCEL_FIELDS = "GISLINK,ADDRESS,CITY,COUNTY,ZIP,LU_ACRES,LU_CLASSIFICATION,WATERSEWER,ELEC,GAS,LANDVALUE,IMPVALUE,APPRAISAL,NUMBUILDINGS,NUMOFMH,FLOODPLAIN,PEROFPARCELINFLOOD,ACRESINFLOOD,MAJORROADFRONTAGE,AADT_2018,INTERSTATEACCESSTENMINUTES,LINK";
+
+async function findParcels(inp, county) {
+  const base = {outFields:PARCEL_FIELDS, returnGeometry:"true", outSR:"4326", geometryPrecision:"6"};
+  const cty = county ? ` AND COUNTY='${sq(county)}'` : "";
+  if (inp.kind === "point") {
+    const j = await arc(SVC.parcels, {...base, geometry:`${inp.lon},${inp.lat}`, geometryType:"esriGeometryPoint", inSR:"4326", spatialRel:"esriSpatialRelIntersects"});
+    return j.features || [];
+  }
+  if (inp.kind === "gislink") {
+    const like = `${inp.map}%${inp.group ? inp.group + "%" : ""}${inp.parcel}%`;
+    const j = await arc(SVC.parcels, {...base, where:`GISLINK LIKE '${sq(like)}'${cty}`});
+    return j.features || [];
+  }
+  if (inp.num && inp.street) {
+    const words = inp.street.split(/\s+/);
+    const stem = words.slice(0, Math.max(1, words.length - 1)).join(" ");
+    const j = await arc(SVC.parcels, {...base, where:`ADDRESS LIKE '${sq(inp.num + " " + stem)}%'${cty}`});
+    if (j.features && j.features.length) return j.features;
+  }
+  const g = await call(SVC.geocode, {SingleLine: /\bTN\b|TENNESSEE/i.test(inp.line) ? inp.line : inp.line + ", TN", f:"json", maxLocations:"1", outSR:"4326"});
+  const c = g.candidates && g.candidates[0];
+  if (!c || c.score < 80) return [];
+  return findParcels({kind:"point", lat:c.location.y, lon:c.location.x}, "");
+}
+
+// ---------- what you'd build ----------
+function plan() {
+  if (mode === "flex") {
+    const n = Math.max(1, Math.round(num($("nb").value) || 5)), slab = num($("slab").value) || 6000;
+    const W = CFG.flexSlabWidth, Ls = slab / W, m = CFG.flexPadMargin;
+    return {flex:true, n, slab, slabW:W, slabL:Ls, L:Ls + 2 * m, W:W + 2 * m, okFt:CFG.flexPadOkFt, failFt:CFG.flexPadFailFt,
+      step:10, gridTarget:700, cost:num($("cost").value), price:num($("price").value),
+      needAcres: n * slab / CFG.flexCoverage / 43560};
+  }
+  return {flex:false, n:1, L:CFG.padLength, W:CFG.padWidth, okFt:CFG.padOkFt, failFt:CFG.padFailFt, step:5, gridTarget:180, price:num($("price").value)};
+}
+
+// ---------- the checks ----------
+async function screen(f, P) {
+  const a = f.attributes, ring = f.geometry.rings[0];
+  const [lon, lat] = centroid(ring);
+  const shape = {rings:[thin(ring, 60)], spatialReference:{wkid:4326}};
+  const geo = {geometry:JSON.stringify(shape), geometryType:"esriGeometryPolygon", inSR:"4326", spatialRel:"esriSpatialRelIntersects", returnGeometry:"false"};
+
+  const ws = String(a.WATERSEWER || "").replace(/^\d+\s*/, "");
+  const [water, sewer] = ws.split("/").map(s => (s||"").trim());
+  const onSewer = /public/i.test(sewer || "");
+
+  const [flood, soils, city, elev] = await Promise.allSettled([
+    arc(SVC.flood, {...geo, outFields:"FLD_ZONE,ZONE_SUBTY,SFHA_TF"}),
+    arc(SVC.soils, {...geo, outFields:"MUSYM,MUKEY,COMPNAME,CAPABILITYCLASS"}),
+    arc(SVC.cities, {geometry:`${lon},${lat}`, geometryType:"esriGeometryPoint", inSR:"4326", spatialRel:"esriSpatialRelIntersects", outFields:"NAME,COUNTY", returnGeometry:"false"}),
+    terrain(ring, P)
+  ]);
+
+  const checks = [];
+  const acres = a.LU_ACRES;
+  const county = (a.COUNTY || "").toUpperCase();
+
+  // Where (flex only)
+  if (P.flex) {
+    const inArea = CFG.flexCounties.includes(county);
+    checks.push({s: inArea ? "pass" : "flag", h:"County", d: inArea ? `${title(county)} County, one of your flex counties.` : `${title(county)} County is outside Putnam, White, Overton and Cumberland.`, src:"State parcel layer"});
+    const aadt = +a.AADT_2018 || 0, major = yes(a.MAJORROADFRONTAGE), i40 = yes(a.INTERSTATEACCESSTENMINUTES);
+    const s = major || aadt >= CFG.flexAadt ? "pass" : "flag";
+    checks.push({s, h:"Corridor road", d:(major ? "Fronts a major road. " : "State layer doesn't show major-road frontage. ") +
+      (aadt ? `Traffic count tied to the parcel: about ${aadt.toLocaleString()} cars a day (2018). ` : "") + (i40 ? "Within 10 minutes of the interstate." : ""), src:"State parcel layer"});
+  }
+
+  // Size
+  if (acres == null) checks.push({s:"flag", h:"Size", d:"No acreage on the county record.", src:"State parcel layer"});
+  else if (P.flex) {
+    const s = acres >= P.needAcres ? "pass" : acres >= P.needAcres * 0.75 ? "flag" : "fail";
+    checks.push({s, h:"Size", d:`${acres.toFixed(2)} acres. ${P.n} buildings of ${P.slab.toLocaleString()} sq ft need about ${P.needAcres.toFixed(1)} acres once drives, parking and setbacks are in.`, src:"State parcel layer"});
+  }
+  else if (onSewer) checks.push({s: acres < CFG.sewerMinAcres ? "flag" : "pass", h:"Size", d:`${acres.toFixed(2)} acres, on public sewer.`, src:"State parcel layer"});
+  else checks.push({s: acres < CFG.septicFailAcres ? "fail" : acres < CFG.septicMinAcres ? "flag" : "pass", h:"Size", d:`${acres.toFixed(2)} acres without public sewer. Septic needs room for the field and a repair area.`, src:"State parcel layer"});
+
+  // Water and sewer
+  const util = `County record: ${water || "unknown"} water, ${sewer || "unknown"} sewer. Electric: ${a.ELEC ? a.ELEC.replace(/^\d+\s*/,"") : "unknown"}. Gas: ${a.GAS ? a.GAS.replace(/^\d+\s*/,"") : "unknown"}.`;
+  checks.push({s: onSewer && /public/i.test(water) ? "pass" : "flag", h:"Water and sewer", d: util + (onSewer ? "" : P.flex ? ` Plan on a septic permit sized for ${P.n} half baths.` : " Plan on a septic permit and a soil evaluation."), src:"State parcel layer (assessor coding, not a utility letter)"});
+
+  // Flood
+  if (flood.status === "fulfilled") {
+    const zones = [...new Set((flood.value.features||[]).map(x => x.attributes.FLD_ZONE + (x.attributes.ZONE_SUBTY ? " (" + title(x.attributes.ZONE_SUBTY) + ")" : "")))];
+    const sfha = (flood.value.features||[]).some(x => x.attributes.SFHA_TF === "T");
+    const pct = a.PEROFPARCELINFLOOD || 0;
+    const s = !sfha ? "pass" : pct >= CFG.floodFailPct ? "fail" : "flag";
+    checks.push({s, h:"Flood", d: (zones.length ? "FEMA zones on the lot: " + zones.join(", ") + "." : "No FEMA flood zone mapped on the lot.") + (sfha ? ` About ${pct}% of the lot is in the 100-year floodplain.` : ""), src:"FEMA flood map"});
+  } else {
+    const inFlood = a.FLOODPLAIN === "YES";
+    checks.push({s: inFlood ? "flag" : "pass", h:"Flood", d: inFlood ? `State layer shows about ${a.PEROFPARCELINFLOOD||0}% of the lot in the floodplain.` : "State layer shows no floodplain on the lot. FEMA map didn't answer.", src:"State parcel layer"});
+  }
+
+  // Soils and septic
+  if (soils.status === "fulfilled" && (soils.value.features||[]).length) {
+    const rows = soils.value.features.map(x => x.attributes);
+    const units = [...new Map(rows.map(r => [r.MUKEY, r])).values()];
+    const names = [...new Set(rows.map(r => r.COMPNAME))].slice(0,4).join(", ");
+    const cls = [...new Set(units.map(u => (u.CAPABILITYCLASS||"").trim()))].join(", ");
+    if (onSewer) {
+      checks.push({s:"pass", h:"Soils", d:`On sewer, so soils matter for footings only. Mapped soils: ${names} (map units ${units.map(u=>u.MUSYM).join(", ")}).`, src:"State soils layer"});
+    } else {
+      const rating = await septicRating(units.map(u => u.MUKEY));
+      let s = "flag", d = `Mapped soils: ${names}. Land class ${cls}.`;
+      if (rating) { s = /very limited/i.test(rating.worst) ? "fail" : /somewhat/i.test(rating.worst) ? "flag" : "pass"; d += ` USDA septic field rating: ${rating.text}.`; }
+      else d += " USDA septic rating didn't come back, so treat soils as unknown.";
+      checks.push({s, h:"Soils and septic", d: d + " A soil scientist's map decides it; this is a first look.", src:"State soils layer, USDA soil survey"});
+    }
+  } else {
+    checks.push({s: onSewer ? "skip" : "flag", h: onSewer ? "Soils" : "Soils and septic", d:"Soils lookup didn't answer.", src:""});
+  }
+
+  // Slope and pads (lidar)
+  let dirt = null;
+  if (elev.status === "fulfilled" && elev.value) {
+    const T = elev.value, src = T.src === "lidar" ? "USGS 3DEP lidar elevation (1 m)" : "USGS elevation points";
+    const s = T.maxGrade >= CFG.slopeFail ? "fail" : T.maxGrade >= CFG.slopeFlag ? "flag" : "pass";
+    checks.push({s, h:"Slope", d:`${Math.round(T.relief)} ft of fall across the lot. Steepest stretch is about ${Math.round(T.maxGrade)}% grade (${T.points} spots checked).`, src});
+    const pads = T.pads.filter(p => p.ok);
+    if (pads.length) {
+      const depth = Math.max(...pads.map(p => Math.max(p.cutDepth, p.fillDepth)));
+      const cut = pads.reduce((s, p) => s + p.cutCY, 0), up = pads.reduce((s, p) => s + p.fillUpCY, 0) * CFG.fillShrink;
+      dirt = cut * CFG.onsiteRate;
+      let ps = depth > P.failFt ? "fail" : depth > P.okFt ? "flag" : "pass";
+      const cy = n => Math.round(n).toLocaleString();
+      let d;
+      if (P.flex) {
+        const fit = T.pads.filter(p => p.fits).length;
+        if (fit < P.n) ps = fit < Math.ceil(P.n * 0.6) ? "fail" : ps === "pass" ? "flag" : ps;
+        d = `${fit} of ${P.n} slabs (${Math.round(P.slabW)} by ${Math.round(P.slabL)} ft, plus ${CFG.flexPadMargin} ft around) fit inside the lot lines without overlapping. ` +
+          `Flattest spots found have up to ${pads.reduce((m, p) => Math.max(m, p.relief), 0).toFixed(1)} ft of fall across a pad. ` +
+          `Leveling them with dirt from the site: about ${cy(cut)} cubic yards cut and placed, up to ${depth.toFixed(1)} ft deep, roughly ${rough(dirt)}. ` +
+          `Building every pad up with trucked-in fill instead: about ${cy(up)} cubic yards, roughly ${rough(up * CFG.importRate)}. Drives, parking and drainage are extra.`;
+      } else {
+        const p = pads[0];
+        if (!p.fits && ps === "pass") ps = "flag";
+        d = (p.fits ? `Best spot for a ${P.L} by ${P.W} ft pad has ${p.relief.toFixed(1)} ft of fall across it. ` : `A ${P.L} by ${P.W} ft pad doesn't fit inside the lot lines, so this is the middle of the lot. `) +
+          `Leveling it with dirt from the lot: about ${cy(p.cutCY)} cubic yards cut and ${cy(p.fillCY)} filled, up to ${depth.toFixed(1)} ft deep, roughly ${rough(dirt)}. ` +
+          `Building it up to the high corner with dirt trucked in: about ${cy(up)} cubic yards, roughly ${rough(up * CFG.importRate)}. ` +
+          `Pad only; slopes past its edge, walls and drainage are extra.`;
+      }
+      const c0 = pads[0];
+      checks.push({s:ps, h: P.flex ? "Slab pads and dirt work" : "Building pad and dirt work", d, src, link:`https://www.google.com/maps/@${c0.lat.toFixed(6)},${c0.lon.toFixed(6)},${P.flex ? 120 : 60}m/data=!3m1!1e3`});
+    } else checks.push({s:"skip", h:"Pads and dirt work", d:"Not enough lidar points came back to judge the pads.", src});
+  } else checks.push({s:"skip", h:"Slope and pads", d:"Elevation service didn't answer.", src:""});
+
+  // Zoning
+  let cityName = "";
+  if (city.status === "fulfilled") cityName = ((city.value.features||[])[0]?.attributes?.NAME || "").toUpperCase();
+  const z = cityName ? ZONING[cityName] : COUNTY_ZONING[county];
+  const use = P.flex ? " Flex space is a commercial use, so confirm it's allowed." : "";
+  if (city.status !== "fulfilled") checks.push({s:"flag", h:"Zoning", d:"City limits lookup didn't answer. Check zoning with the city or county.", src:""});
+  else if (z) checks.push({s:z.s, h:"Zoning", d:(cityName ? `Inside ${title(cityName)} city limits. ` : `Outside city limits in ${title(county)} County. `) + z.t + (z.s === "flag" ? use : ""), src: cityName ? "City of " + title(cityName) : title(county) + " County", link:z.link});
+  else checks.push({s:"flag", h:"Zoning", d:(cityName ? `Inside ${title(cityName)} city limits. Check its zoning and minimum lot size.` : `Outside city limits in ${title(county)} County. Confirm whether the county zones this area and its minimum lot size.`) + use, src:"State city limits layer"});
+
+  // Road access (house only; flex has the corridor check)
+  if (!P.flex) {
+    const noAddr = !a.ADDRESS;
+    checks.push({s: yes(a.MAJORROADFRONTAGE) ? "pass" : "flag", h:"Road access",
+      d: yes(a.MAJORROADFRONTAGE) ? "Fronts a major road." : "Confirm frontage on a public road on the map or plat." + (noAddr ? " No street address on the county record." : ""), src:"State parcel layer"});
+  }
+
+  // Land cost against build cost (flex)
+  let econ = null;
+  if (P.flex) {
+    const land = P.price || a.LANDVALUE, landSrc = P.price ? "your asking price" : "the county land value";
+    if (!P.cost) checks.push({s:"skip", h:"Land vs build cost", d:"Type your build cost per square foot above to see whether the land price works.", src:""});
+    else if (!land) checks.push({s:"flag", h:"Land vs build cost", d:"No price. Type the asking price above.", src:""});
+    else {
+      const sqft = P.n * P.slab, build = sqft * P.cost, site = P.n * CFG.flexSitePerBldg, dirtCost = dirt || 0;
+      const total = land + dirtCost + site + build, share = (land + dirtCost) / total;
+      const s = share <= CFG.landShareOk ? "pass" : share <= CFG.landShareFail ? "flag" : "fail";
+      const maxLand = CFG.landShareOk * (build + site) / (1 - CFG.landShareOk) - dirtCost;
+      econ = {land, landSrc, build, site, dirt:dirtCost, total, sqft};
+      checks.push({s, h:"Land vs build cost", d:`Land (${landSrc}) ${money(land)} plus dirt work ${rough(dirtCost)} is ${Math.round(share * 100)}% of a ${money(total)} project: ${money(build)} to build ${sqft.toLocaleString()} sq ft and ${money(site)} of site work. ` +
+        `That's ${money(land / sqft)} of land per buildable sq ft, ${money(total / sqft)} all in. Land works up to about ${rough(Math.max(0, maxLand))} at your ${Math.round(CFG.landShareOk * 100)}% target.`, src:"Your numbers, county record, lidar dirt estimate"});
+    }
+  }
+
+  return {
+    title: a.ADDRESS ? title(a.ADDRESS) + (a.CITY ? ", " + title(a.CITY) : "") : "Parcel " + a.GISLINK,
+    flex: P.flex,
+    facts: {gislink:a.GISLINK, county:title(a.COUNTY), city: cityName ? title(cityName) : "Outside city limits", acres, landValue:a.LANDVALUE,
+      use: (a.NUMBUILDINGS || a.IMPVALUE) ? `${a.NUMBUILDINGS||0} building(s), ${money(a.IMPVALUE)} in improvements` : `Vacant land (county class ${a.LU_CLASSIFICATION})`, lat, lon},
+    links: [
+      a.LINK && {t:"County assessment record", u:a.LINK.replace(/ /g,"%20")},
+      {t:"Satellite view", u:`https://www.google.com/maps/@${lat.toFixed(6)},${lon.toFixed(6)},${P.flex ? 400 : 300}m/data=!3m1!1e3`},
+      {t:"FEMA flood map", u:`https://msc.fema.gov/portal/search?AddressQuery=${lat.toFixed(6)}%2C${lon.toFixed(6)}`}
+    ].filter(Boolean),
+    checks
+  };
+}
+
+// Elevations in feet for [lon,lat] points: lidar surface first, single-point service as backup
+async function elevations(lonlats) {
+  const out = new Array(lonlats.length).fill(NaN);
+  try {
+    for (let i = 0; i < lonlats.length; i += 400) {
+      const chunk = lonlats.slice(i, i + 400);
+      const j = await call(SVC.dem, {geometry:JSON.stringify({points:chunk, spatialReference:{wkid:4326}}), geometryType:"esriGeometryMultipoint",
+        returnFirstValueOnly:"true", interpolation:"RSP_BilinearInterpolation", f:"json"}, {method:"POST", timeout:30000});
+      (j.samples || []).forEach((s, k) => { const v = parseFloat(s.value); const at = i + (Number.isInteger(s.locationId) ? s.locationId : k);
+        if (isFinite(v) && v > -300) out[at] = v * 3.28084; });
+    }
+    if (out.filter(isFinite).length >= lonlats.length * 0.8) return {z:out, src:"lidar"};
+  } catch {}
+  out.fill(NaN); let k = 0;
+  const todo = lonlats.length > 400 ? lonlats.map((p, i) => i).filter(i => i % Math.ceil(lonlats.length / 400) === 0) : lonlats.map((p, i) => i);
+  async function worker() { while (k < todo.length) { const i = todo[k++];
+    try { const j = await call(SVC.elev, {x:lonlats[i][0], y:lonlats[i][1], units:"Feet", wkid:"4326"}); const v = +j.value; if (isFinite(v) && v > -1000) out[i] = v; } catch {} } }
+  await Promise.all(Array.from({length:8}, worker));
+  return {z:out, src:"points"};
+}
+
+// Lot terrain from lidar: slope, then the flattest non-overlapping spots for P.n pads and the dirt work to level each
+async function terrain(ring, P) {
+  const [lon0, lat0] = centroid(ring), FY = 364000, FX = FY * Math.cos(lat0 * Math.PI / 180);
+  const toXY = ([lo, la]) => [(lo - lon0) * FX, (la - lat0) * FY], toLL = ([x, y]) => [lon0 + x / FX, lat0 + y / FY];
+  const poly = ring.map(toXY), xs = poly.map(p => p[0]), ys = poly.map(p => p[1]);
+  const area = Math.abs(poly.reduce((s, p, i) => { const q = poly[(i + 1) % poly.length]; return s + p[0] * q[1] - q[0] * p[1]; }, 0) / 2);
+  let ang = 0, longest = 0;
+  for (let i = 0; i < poly.length - 1; i++) { const dx = poly[i+1][0] - poly[i][0], dy = poly[i+1][1] - poly[i][1], L = Math.hypot(dx, dy); if (L > longest) { longest = L; ang = Math.atan2(dy, dx); } }
+
+  // 1. grid over the whole lot
+  const sp = Math.max(8, Math.sqrt(area / P.gridTarget)), grid = [];
+  for (let x = Math.min(...xs) + sp / 2; x < Math.max(...xs); x += sp)
+    for (let y = Math.min(...ys) + sp / 2; y < Math.max(...ys); y += sp) if (inside([x, y], poly)) grid.push([x, y]);
+  if (grid.length < 4) grid.push([0, 0], ...poly.slice(0, -1).map(p => [p[0] * 0.8, p[1] * 0.8]));
+  const g = await elevations(grid.map(toLL));
+  const pts = grid.map((p, i) => ({x:p[0], y:p[1], z:g.z[i]})).filter(p => isFinite(p.z));
+  if (pts.length < 4) return null;
+  let maxGrade = 0;
+  for (const a of pts) for (const b of pts) { const d = Math.hypot(a.x - b.x, a.y - b.y); if (d > sp * 0.9 && d < sp * 1.5) maxGrade = Math.max(maxGrade, Math.abs(a.z - b.z) / d * 100); }
+  const zs = pts.map(p => p.z), relief = Math.max(...zs) - Math.min(...zs);
+
+  // 2. flattest spots where each pad fits inside the lot lines, without overlapping the ones already placed
+  const L = P.L, W = P.W, reach = Math.max(L, W) / 2 + sp / 2;
+  const box = (cx, cy, t) => [[-L/2,-W/2],[L/2,-W/2],[L/2,W/2],[-L/2,W/2]].map(([u, v]) => [cx + u * Math.cos(t) - v * Math.sin(t), cy + u * Math.sin(t) + v * Math.cos(t)]);
+  const cands = [];
+  for (const t of [ang, ang + Math.PI / 2]) for (const p of pts) {
+    const b = box(p.x, p.y, t);
+    if (!b.every(q => inside(q, poly))) continue;
+    const near = pts.filter(q => Math.hypot(q.x - p.x, q.y - p.y) <= reach).map(q => q.z);
+    cands.push({cx:p.x, cy:p.y, t, b, score:Math.max(...near) - Math.min(...near), fits:true});
+  }
+  cands.sort((a, b) => a.score - b.score);
+  const chosen = [];
+  for (const c of cands) { if (chosen.length >= P.n) break; if (chosen.every(o => !boxesOverlap(o.b, c.b))) chosen.push(c); }
+  if (!chosen.length) chosen.push({cx:0, cy:0, t:ang, fits:false});
+
+  // 3. fine lidar samples on each pad, then cut and fill
+  const fine = [], owner = [];
+  chosen.forEach((c, k) => { const co = Math.cos(c.t), si = Math.sin(c.t);
+    for (let u = -L/2 + P.step/2; u < L/2; u += P.step) for (let v = -W/2 + P.step/2; v < W/2; v += P.step) { fine.push([c.cx + u * co - v * si, c.cy + u * si + v * co]); owner.push(k); } });
+  const f = await elevations(fine.map(toLL));
+  const pads = chosen.map((c, k) => {
+    const fz = f.z.filter((z, i) => owner[i] === k && isFinite(z)), all = owner.filter(o => o === k).length;
+    const [plon, plat] = toLL([c.cx, c.cy]);
+    if (fz.length < all * 0.6) return {ok:false, fits:c.fits, lon:plon, lat:plat};
+    const cell = P.step * P.step * (all / fz.length), mean = fz.reduce((a, b) => a + b, 0) / fz.length;
+    const top = Math.max(...fz), low = Math.min(...fz);
+    let cut = 0, fill = 0, up = 0;
+    fz.forEach(z => { if (z > mean) cut += (z - mean) * cell; else fill += (mean - z) * cell; up += (top - z) * cell; });
+    return {ok:true, fits:c.fits, relief:top - low, cutCY:cut / 27, fillCY:fill / 27, fillUpCY:up / 27, cutDepth:top - mean, fillDepth:mean - low, lon:plon, lat:plat};
+  });
+  return {maxGrade, relief, points:pts.length, src:g.src, pads};
+}
+
+async function septicRating(mukeys) {
+  const keys = [...new Set(mukeys)].filter(k => /^\d+$/.test(k));
+  if (!keys.length) return null;
+  const sql = "SELECT c.mukey, c.compname, c.comppct_r, ci.interphrc FROM component c INNER JOIN cointerp ci ON ci.cokey = c.cokey " +
+    "WHERE c.mukey IN (" + keys.map(k => "'" + k + "'").join(",") + ") AND c.majcompflag = 'Yes' AND ci.mrulename = 'ENG - Septic Tank Absorption Fields' AND ci.ruledepth = 0 ORDER BY c.comppct_r DESC";
+  try {
+    const j = await call(SVC.sda, {query:sql, format:"JSON"}, {method:"POST"});
+    const rows = j.Table || []; if (!rows.length) return null;
+    const order = ["Not limited","Somewhat limited","Very limited"];
+    const worst = rows.map(r => r[3]).sort((x,y) => order.indexOf(y) - order.indexOf(x))[0];
+    const text = rows.slice(0,3).map(r => `${r[1]} ${r[2]}%: ${r[3]}`).join("; ");
+    return {worst, text};
+  } catch { return null; }
+}
+
+// ---------- finding sites ----------
+async function findSites(P, county) {
+  const counties = county ? [county] : (P.flex ? CFG.flexCounties : []);
+  if (!counties.length) throw new Error("Pick a county first.");
+  const minA = P.flex ? Math.max(1, P.needAcres * 0.9) : 0.25, maxA = P.flex ? CFG.findMaxAcres : 5;
+  const where = `COUNTY IN (${counties.map(c => `'${sq(c)}'`).join(",")}) AND LU_ACRES >= ${minA.toFixed(2)} AND LU_ACRES <= ${maxA} AND (IMPVALUE IS NULL OR IMPVALUE < 25000)` +
+    (P.flex ? " AND MAJORROADFRONTAGE = 'YES'" : "");
+  const j = await arc(SVC.parcels, {where, outFields:PARCEL_FIELDS, returnGeometry:"true", outSR:"4326", geometryPrecision:"6", resultRecordCount:"300"});
+  const fs = (j.features || []).filter(f => f.geometry && f.geometry.rings && f.attributes.LU_ACRES > 0);
+  fs.sort((a, b) => (a.attributes.LANDVALUE || 1e12) / a.attributes.LU_ACRES - (b.attributes.LANDVALUE || 1e12) / b.attributes.LU_ACRES);
+  return fs;
+}
+
+// ---------- drawing ----------
+function verdictOf(checks, flex) {
+  if (checks.some(c => c.s === "fail")) return {s:"fail", t: flex ? "Not a fit for your flex build as-is" : "Likely not buildable as-is"};
+  if (checks.some(c => c.s === "flag")) return {s:"flag", t: flex ? "Could work for flex, with questions to answer" : "Buildable, with questions to answer"};
+  return {s:"pass", t: flex ? "Looks like a flex site" : "Looks buildable"};
+}
+function render(r) {
+  const v = verdictOf(r.checks, r.flex), f = r.facts;
+  const nFlag = r.checks.filter(c => c.s === "flag").length, nFail = r.checks.filter(c => c.s === "fail").length;
+  $("result").innerHTML = `
+    <div class="verdict ${v.s}">
+      <span class="tag">${r.example ? "EXAMPLE · " : ""}${r.flex ? "FLEX · " : ""}${esc(r.title)}</span>
+      <h2>${v.t}</h2>
+      <span class="hint">${nFail} fail, ${nFlag} to check, ${r.checks.length - nFail - nFlag} clear</span>
+    </div>
+    <dl class="facts">
+      <div><dt>Parcel ID</dt><dd class="mono">${esc(f.gislink)}</dd></div>
+      <div><dt>Acres</dt><dd>${f.acres != null ? f.acres.toFixed(2) : "—"}</dd></div>
+      <div><dt>County</dt><dd>${esc(f.county)}</dd></div>
+      <div><dt>City</dt><dd>${esc(f.city)}</dd></div>
+      <div><dt>County land value</dt><dd>${money(f.landValue)}</dd></div>
+      <div><dt>On it now</dt><dd>${esc(f.use)}</dd></div>
+    </dl>
+    <ul class="checks">${r.checks.map(c => `
+      <li><span class="chip ${c.s}">${{pass:"Clear",flag:"Check",fail:"Fail",skip:"Not run"}[c.s]}</span>
+        <div><h3>${esc(c.h)}</h3><p>${esc(c.d)}${c.link ? ` <a href="${esc(c.link)}" target="_blank" rel="noopener">Open map</a>` : ""}</p>${c.src ? `<p class="src">${esc(c.src)}</p>` : ""}</div></li>`).join("")}
+    </ul>
+    <div class="links">${r.links.map(l => `<a href="${esc(l.u)}" target="_blank" rel="noopener">${esc(l.t)}</a>`).join("")}</div>`;
+}
+function renderRules() {
+  const P = plan();
+  $("rules").innerHTML = [
+    `House size: on sewer, under ${CFG.sewerMinAcres} ac is a check. Without sewer, under ${CFG.septicMinAcres} ac is a check and under ${CFG.septicFailAcres} ac fails.`,
+    `Flex size: buildings times slab size, divided by ${Math.round(CFG.flexCoverage * 100)}% coverage for drives, parking and setbacks. Short by up to a quarter is a check, more fails.`,
+    `Corridor road (flex): clear when the state layer shows major-road frontage or a traffic count of ${CFG.flexAadt.toLocaleString()} cars a day or more.`,
+    `Water and sewer: public water and sewer is clear. Anything else is a check, because it means a septic permit.`,
+    `Flood: any FEMA 100-year zone on the lot is a check. ${CFG.floodFailPct}% or more of the lot in it fails.`,
+    `Soils (septic lots only): USDA "very limited" for septic fields fails, "somewhat limited" is a check.`,
+    `Slope: a ${CFG.slopeFlag}% grade anywhere on the lot is a check, ${CFG.slopeFail}% fails.`,
+    `House pad: the flattest ${CFG.padLength} by ${CFG.padWidth} ft spot inside the lot lines on the lidar surface. Cut or fill up to ${CFG.padOkFt} ft is clear, over ${CFG.padFailFt} ft fails.`,
+    `Flex pads: places each slab (${CFG.flexSlabWidth} ft wide, plus ${CFG.flexPadMargin} ft around) on the flattest open spot, no overlaps. Up to ${CFG.flexPadOkFt} ft of cut or fill is clear, over ${CFG.flexPadFailFt} ft fails.`,
+    `Dirt costs use $${CFG.onsiteRate} a cubic yard to move dirt on site and $${CFG.importRate} for fill trucked in, plus ${Math.round((CFG.fillShrink - 1) * 100)}% for compaction.`,
+    `Land vs build (flex): land plus dirt work as a share of the whole project (land, dirt, ${money(CFG.flexSitePerBldg)} site work per building, and your build cost). Up to ${Math.round(CFG.landShareOk * 100)}% is clear, over ${Math.round(CFG.landShareFail * 100)}% fails.`,
+    `Find sites: vacant or nearly vacant parcels (under $25,000 of improvements) in the county you pick, or your four flex counties. Flex searches need major-road frontage. Cheapest county land value per acre first.`,
+    `Data: Tennessee Comptroller parcel layer (updated yearly, last April 2025), FEMA flood map, state soils layer and USDA soil survey, USGS 3DEP lidar elevation (1 m), state city limits. County land value is the assessor's figure, not a market price.`
+  ].map(t => `<li>${esc(t)}</li>`).join("");
+}
+
+// ---------- wiring ----------
+let live = false, mode = store.get("ls-mode") === "flex" ? "flex" : "sf";
+function setMode(m) {
+  mode = m; store.set("ls-mode", m);
+  $("m-sf").setAttribute("aria-pressed", m === "sf"); $("m-flex").setAttribute("aria-pressed", m === "flex");
+  $("flexrow").hidden = m !== "flex";
+  $("go").textContent = m === "flex" ? "Screen this site" : "Screen this lot";
+  $("modehint").textContent = m === "flex"
+    ? "Find sites lists vacant parcels on major roads in Putnam, White, Overton and Cumberland (or the county you pick) big enough for your buildings."
+    : "Paste a whole wholesaler email and it pulls the first street address out of it. Find sites lists vacant parcels in the county you pick.";
+  renderRules();
+}
+$("m-sf").addEventListener("click", () => setMode("sf"));
+$("m-flex").addEventListener("click", () => setMode("flex"));
+["nb", "slab", "cost"].forEach(id => { const v = store.get("ls-" + id); if (v) $(id).value = v; $(id).addEventListener("change", () => { store.set("ls-" + id, $(id).value); renderRules(); }); });
+
+async function probe() {
+  try { await call(SVC.parcels, {where:"1=0", returnCountOnly:"true", f:"json"}, {timeout:7000}); live = true; }
+  catch { live = false; }
+  $("preview").hidden = live;
+  $("go").disabled = $("find").disabled = !live;
+  if (!live) $("status").textContent = "Showing the saved example.";
+}
+async function run(feature) {
+  $("picker").hidden = true;
+  $("status").textContent = "Checking flood, soils, lidar and zoning…";
+  try { render(await screen(feature, plan())); $("status").textContent = ""; $("result").scrollIntoView({behavior:"smooth", block:"start"}); }
+  catch (e) { $("status").textContent = "Couldn't finish the checks: " + e.message; }
+}
+function pick(found, label) {
+  $("status").textContent = label;
+  const p = $("picker"); p.hidden = false; p.innerHTML = "";
+  found.slice(0, 40).forEach(f => { const b = document.createElement("button"); b.type = "button"; const a = f.attributes;
+    const perAc = a.LANDVALUE && a.LU_ACRES ? ` · ${money(a.LANDVALUE / a.LU_ACRES)}/ac` : "";
+    b.textContent = `${a.ADDRESS ? title(a.ADDRESS) : "No address"} · ${title(a.COUNTY)} · ${(a.LU_ACRES||0).toFixed(2)} ac · land ${money(a.LANDVALUE)}${perAc}`;
+    b.addEventListener("click", () => run(f)); p.appendChild(b); });
+}
+$("form").addEventListener("submit", async e => {
+  e.preventDefault();
+  if (!live) return;
+  const inp = parseInput($("q").value);
+  if (!inp) { $("status").textContent = "Type an address, a parcel ID or a map point."; return; }
+  $("go").disabled = true; $("status").textContent = "Finding the parcel…";
+  try {
+    const found = await findParcels(inp, $("county").value);
+    if (!found.length) { $("status").textContent = "No parcel found. Try the parcel ID from the county record, or a map point (lat, long)."; return; }
+    if (found.length === 1) return await run(found[0]);
+    pick(found, `${found.length} parcels match. Pick one:`);
+  } catch (err) { $("status").textContent = "Lookup failed: " + err.message; }
+  finally { $("go").disabled = !live; }
+});
+$("find").addEventListener("click", async () => {
+  if (!live) return;
+  $("find").disabled = true; $("status").textContent = "Searching the county parcel map…";
+  try {
+    const fs = await findSites(plan(), $("county").value);
+    if (!fs.length) $("status").textContent = "No parcels matched. Try another county, or fewer buildings.";
+    else pick(fs, `${fs.length} parcels found${fs.length > 40 ? ", showing the 40 cheapest per acre" : ""}. Tap one to screen it:`);
+  } catch (err) { $("status").textContent = "Search failed: " + err.message; }
+  finally { $("find").disabled = !live; }
+});
+setMode(mode);
+render(EXAMPLE);
+probe();
+</script>
+
+</body>
+</html>
