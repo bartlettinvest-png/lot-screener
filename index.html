@@ -368,11 +368,12 @@ async function screen(f, P) {
   const track = (name, pr) => pr.finally(() => { pending.delete(name); stage(); });
   const limit = (pr, ms) => { let t; return Promise.race([pr, new Promise((_, no) => { t = setTimeout(() => no(new Error("took too long")), ms); })]).finally(() => clearTimeout(t)); };
   stageBase = "Checking"; stage();
+  const floodQ = arc(SVC.flood, {...geo, returnGeometry:"true", outSR:"4326", maxAllowableOffset:"0.00002", geometryPrecision:"6", outFields:"FLD_ZONE,ZONE_SUBTY,SFHA_TF"});
   const [flood, soils, city, elev] = await Promise.allSettled([
-    track("flood", arc(SVC.flood, {...geo, outFields:"FLD_ZONE,ZONE_SUBTY,SFHA_TF"})),
+    track("flood", floodQ),
     track("soils", arc(SVC.soils, {...geo, outFields:"MUSYM,MUKEY,COMPNAME,CAPABILITYCLASS"})),
     track("city limits", arc(SVC.cities, {geometry:`${lon},${lat}`, geometryType:"esriGeometryPoint", inSR:"4326", spatialRel:"esriSpatialRelIntersects", outFields:"NAME,COUNTY", returnGeometry:"false"})),
-    track("lidar", limit(terrain(ring, P), 150000))
+    track("lidar", limit(terrain(ring, {...P, flood:floodQ.catch(() => null)}), 150000))
   ]);
   stageBase = "";
 
@@ -426,7 +427,10 @@ async function screen(f, P) {
     } else {
       const rating = await septicRating(units.map(u => u.MUKEY));
       let s = "flag", d = `Mapped soils: ${names}. Land class ${cls}.`;
-      if (rating) { s = /very limited/i.test(rating.worst) ? "fail" : /somewhat/i.test(rating.worst) ? "flag" : "pass"; d += ` USDA septic field rating: ${rating.text}.`; }
+      if (rating) {
+        s = /very limited/i.test(rating.best) ? "fail" : /not limited/i.test(rating.worst) ? "pass" : "flag";
+        d += ` USDA septic field rating by soil: ${rating.text}.` + (s === "flag" && /very limited/i.test(rating.worst) ? " Put the septic fields on the better soils and keep them off the very limited ones." : "");
+      }
       else d += " USDA septic rating didn't come back, so treat soils as unknown.";
       checks.push({s, h:"Soils and septic", d: d + " A soil scientist's map decides it; this is a first look.", src:"State soils layer, USDA soil survey"});
     }
@@ -437,9 +441,13 @@ async function screen(f, P) {
   // Slope and pads (lidar)
   let dirt = null, buildings = null;
   if (elev.status === "fulfilled" && elev.value) {
-    const T = elev.value, src = T.src === "lidar" ? "USGS 3DEP lidar elevation (1 m)" : "USGS elevation points";
-    const s = T.maxGrade >= CFG.slopeFail ? "fail" : T.maxGrade >= CFG.slopeFlag ? "flag" : "pass";
-    checks.push({s, h:"Slope", d:`${Math.round(T.relief)} ft of fall across the lot. Steepest stretch is about ${Math.round(T.maxGrade)}% grade (${T.points} spots checked).`, src});
+    const T = elev.value, srcName = x => x === "lidar" ? "USGS 3DEP lidar elevation (1 m)" : "USGS spot elevations (coarser than lidar)";
+    const src = srcName(T.padSrc || T.src);
+    let s = T.maxGrade >= CFG.slopeFail ? "fail" : T.maxGrade >= CFG.slopeFlag ? "flag" : "pass";
+    const padOk = T.pads.some(p => p.ok && p.fits && Math.max(p.cutDepth, p.fillDepth) <= P.failFt);
+    if (s === "fail" && padOk && (P.flex || (acres || 0) >= 2)) s = "flag";
+    checks.push({s, h:"Slope", d:`${Math.round(T.relief)} ft of fall across the lot. Steepest stretch is about ${Math.round(T.maxGrade)}% grade (${T.points} spots checked).` +
+      (s === "flag" && T.maxGrade >= CFG.slopeFail ? " The steep ground is only part of the lot; the pad check below works around it." : ""), src:srcName(T.src)});
     const pads = T.pads.filter(p => p.ok);
     const cy = n => Math.round(n).toLocaleString(), dep = p => Math.max(p.cutDepth, p.fillDepth);
     if (pads.length && P.flex) {
@@ -457,7 +465,8 @@ async function screen(f, P) {
           (planN < lidarN ? `, but the acreage leaves room for drives and parking around ${planN}. ` : ". ") +
           `${easy} pad${easy === 1 ? "" : "s"} need ${P.okFt} ft or less of cut or fill. ` +
           `Leveling the best ${planN} with dirt from the site: about ${cy(cut)} cubic yards, ${deep.toFixed(1)} ft at the deepest, roughly ${rough(dirt)}. ` +
-          `Building them up with trucked-in fill instead: about ${cy(up)} cubic yards, roughly ${rough(up * CFG.importRate)}. Drives, parking and drainage are extra.`;
+          `Building them up with trucked-in fill instead: about ${cy(up)} cubic yards, roughly ${rough(up * CFG.importRate)}. Drives, parking and drainage are extra.` +
+          (T.floodSkipped ? " Pads are kept out of the FEMA 100-year floodplain." : T.floodChecked ? "" : " FEMA map didn't answer, so pads weren't checked against the floodplain.");
       } else d = `No spot inside the lot lines fits a ${Math.round(P.slabW + 2 * CFG.flexPadMargin)} by ${Math.round(P.slabL + 2 * CFG.flexPadMargin)} ft slab pad with ${P.failFt} ft or less of cut or fill.`;
       checks.push({s:ps, h:"Flex buildings that fit (lidar)", d, src, link:`https://www.google.com/maps/@${c0.lat.toFixed(6)},${c0.lon.toFixed(6)},150m/data=!3m1!1e3`});
     } else if (pads.length) {
@@ -472,6 +481,9 @@ async function screen(f, P) {
       checks.push({s:ps, h:"Building pad and dirt work", d, src, link:`https://www.google.com/maps/@${p.lat.toFixed(6)},${p.lon.toFixed(6)},60m/data=!3m1!1e3`});
     } else checks.push({s:"skip", h:"Pads and dirt work", d:"Not enough lidar points came back to judge the pads.", src});
   } else checks.push({s:"skip", h:"Slope and pads", d:"Elevation service didn't answer.", src:""});
+  { const fc = checks.find(c => c.h === "Flood"), T = elev.status === "fulfilled" && elev.value;
+    if (fc && fc.s === "fail" && T && T.floodChecked && (P.flex ? buildings > 0 : T.pads.some(p => p.ok && p.fits && Math.max(p.cutDepth, p.fillDepth) <= P.failFt))) {
+      fc.s = "flag"; fc.d += " The pads below sit outside it, but drives, parking and septic need to stay out of it too."; } }
 
   // Zoning
   let cityName = "";
@@ -524,24 +536,32 @@ let lidarDown = null;
 // Elevations in feet for [lon,lat] points: lidar surface first, single-point service as backup
 async function elevations(lonlats, cap = 60) {
   const out = new Array(lonlats.length).fill(NaN);
-  if (lidarDown !== true) try {
-    for (let i = 0; i < lonlats.length; i += 400) {
-      const chunk = lonlats.slice(i, i + 400);
-      const j = await call(SVC.dem, {geometry:JSON.stringify({points:chunk, spatialReference:{wkid:4326}}), geometryType:"esriGeometryMultipoint",
-        returnFirstValueOnly:"true", interpolation:"RSP_BilinearInterpolation", f:"json"}, {method:"POST", timeout:30000});
-      (j.samples || []).forEach((s, k) => { const v = parseFloat(s.value); const at = i + (Number.isInteger(s.locationId) ? s.locationId : k);
-        if (isFinite(v) && v > -300) out[at] = v * 3.28084; });
-    }
-    if (out.filter(isFinite).length >= lonlats.length * 0.8) { lidarDown = false; return {z:out, src:"lidar"}; }
-  } catch {}
-  if (lidarDown === null) lidarDown = true;
-  stage("USGS lidar surface didn't answer, using spot elevations");
-  out.fill(NaN); let k = 0;
-  const todo = lonlats.map((p, i) => i).filter(i => lonlats.length <= cap || i % Math.ceil(lonlats.length / cap) === 0);
+  if (lidarDown !== true) {
+    let answered = 0;
+    const one = async i => {
+      const chunk = lonlats.slice(i, i + 200);
+      for (let tryNo = 0; tryNo < 2; tryNo++) try {
+        const j = await call(SVC.dem, {geometry:JSON.stringify({points:chunk.map(p => [+p[0].toFixed(6), +p[1].toFixed(6)]), spatialReference:{wkid:4326}}), geometryType:"esriGeometryMultipoint",
+          returnFirstValueOnly:"true", interpolation:"RSP_BilinearInterpolation", f:"json"}, {method:"POST", timeout:25000});
+        (j.samples || []).forEach((s, k) => { const v = parseFloat(s.value); const at = i + (Number.isInteger(s.locationId) ? s.locationId : k);
+          if (isFinite(v) && v > -300) out[at] = v * 3.28084; });
+        answered++; return;
+      } catch {}
+    };
+    const starts = []; for (let i = 0; i < lonlats.length; i += 200) starts.push(i);
+    let n = 0; await Promise.all(Array.from({length:3}, async () => { while (n < starts.length) await one(starts[n++]); }));
+    if (answered) lidarDown = false; else if (lidarDown === null) lidarDown = true;
+    if (out.filter(isFinite).length >= lonlats.length * 0.9) return {z:out, src:"lidar"};
+  }
+  const lidarHad = out.filter(isFinite).length;
+  stage(lidarHad ? "filling gaps the lidar surface missed with spot elevations" : "USGS lidar surface didn't answer, using spot elevations");
+  let k = 0;
+  const gaps = lonlats.map((p, i) => i).filter(i => !isFinite(out[i]));
+  const todo = gaps.filter((i, j) => gaps.length <= cap || j % Math.ceil(gaps.length / cap) === 0);
   async function worker() { while (k < todo.length) { const i = todo[k++];
     try { const j = await call(SVC.elev, {x:lonlats[i][0], y:lonlats[i][1], units:"Feet", wkid:"4326"}); const v = +j.value; if (isFinite(v) && v > -1000) out[i] = v; } catch {} } }
   await Promise.all(Array.from({length:12}, worker));
-  return {z:out, src:"points"};
+  return {z:out, src: lidarHad >= lonlats.length * 0.8 ? "lidar" : "points"};
 }
 
 // Lot terrain from lidar: slope, then the flattest non-overlapping spots for P.n pads and the dirt work to level each
@@ -566,13 +586,18 @@ async function terrain(ring, P) {
   for (const a of pts) for (const b of pts) { const d = Math.hypot(a.x - b.x, a.y - b.y); if (d > sp * 0.9 && d < sp * 1.5) maxGrade = Math.max(maxGrade, Math.abs(a.z - b.z) / d * 100); }
   const zs = pts.map(p => p.z), relief = Math.max(...zs) - Math.min(...zs);
 
-  // 2. flattest spots where each pad fits inside the lot lines, without overlapping the ones already placed
+  // 2. flattest spots where each pad fits inside the lot lines and stays out of the FEMA 100-year floodplain, without overlapping
+  const fl = P.flood ? await P.flood : null;
+  const sfha = fl ? (fl.features || []).filter(x => x.attributes.SFHA_TF === "T" && x.geometry && x.geometry.rings).map(x => x.geometry.rings.map(r => r.map(toXY))) : [];
+  const wet = q => sfha.some(rs => rs.filter(r => inside(q, r)).length % 2 === 1);
+  let floodSkipped = 0;
   const L = P.L, W = P.W, reach = Math.max(L, W) / 2 + sp / 2;
   const box = (cx, cy, t) => [[-L/2,-W/2],[L/2,-W/2],[L/2,W/2],[-L/2,W/2]].map(([u, v]) => [cx + u * Math.cos(t) - v * Math.sin(t), cy + u * Math.sin(t) + v * Math.cos(t)]);
   const cands = [];
   for (const t of [ang, ang + Math.PI / 2]) for (const p of pts) {
     const b = box(p.x, p.y, t);
     if (!b.every(q => inside(q, poly))) continue;
+    if (sfha.length && (wet([p.x, p.y]) || b.some(wet))) { floodSkipped++; continue; }
     const near = pts.filter(q => Math.hypot(q.x - p.x, q.y - p.y) <= reach).map(q => q.z);
     cands.push({cx:p.x, cy:p.y, t, b, score:Math.max(...near) - Math.min(...near), fits:true});
   }
@@ -597,7 +622,7 @@ async function terrain(ring, P) {
     fz.forEach(z => { if (z > mean) cut += (z - mean) * cell; else fill += (mean - z) * cell; up += (top - z) * cell; });
     return {ok:true, fits:c.fits, relief:top - low, cutCY:cut / 27, fillCY:fill / 27, fillUpCY:up / 27, cutDepth:top - mean, fillDepth:mean - low, lon:plon, lat:plat};
   });
-  return {maxGrade, relief, points:pts.length, src:g.src, pads};
+  return {maxGrade, relief, points:pts.length, src:g.src, padSrc:f.src, pads, floodChecked:!!fl, floodSkipped};
 }
 
 async function septicRating(mukeys) {
@@ -608,10 +633,11 @@ async function septicRating(mukeys) {
   try {
     const j = await call(SVC.sda, {query:sql, format:"JSON"}, {method:"POST"});
     const rows = j.Table || []; if (!rows.length) return null;
-    const order = ["Not limited","Somewhat limited","Very limited"];
-    const worst = rows.map(r => r[3]).sort((x,y) => order.indexOf(y) - order.indexOf(x))[0];
-    const text = rows.slice(0,3).map(r => `${r[1]} ${r[2]}%: ${r[3]}`).join("; ");
-    return {worst, text};
+    const order = ["Not limited","Somewhat limited","Very limited"], rank = r => order.indexOf(r);
+    const dom = [...new Map(rows.slice().reverse().map(r => [r[0], r])).values()];
+    const worst = dom.map(r => r[3]).sort((x, y) => rank(y) - rank(x))[0], best = dom.map(r => r[3]).sort((x, y) => rank(x) - rank(y))[0];
+    const seen = new Set(), text = dom.sort((x, y) => rank(x[3]) - rank(y[3])).filter(r => !seen.has(r[1] + r[3]) && seen.add(r[1] + r[3])).slice(0, 4).map(r => `${r[1]}: ${r[3].toLowerCase()}`).join("; ");
+    return {worst, best, text, units:dom.length};
   } catch { return null; }
 }
 
