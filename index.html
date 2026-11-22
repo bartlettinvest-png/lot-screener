@@ -727,12 +727,14 @@ async function probe() {
   $("go").disabled = $("find").disabled = !live;
   if (!live) $("status").textContent = "Showing the saved example.";
 }
-async function run(feature) {
+async function run(feature, fromSearch) {
   $("picker").hidden = true;
+  const P = plan(); if (fromSearch) P.price = 0;
   $("status").textContent = "Checking flood, soils, lidar and zoning…";
-  try { render(await screen(feature, plan())); $("status").textContent = ""; $("result").scrollIntoView({behavior:"smooth", block:"start"}); }
+  try { render(await screen(feature, P)); $("status").textContent = ""; $("result").scrollIntoView({behavior:"smooth", block:"start"}); }
   catch (e) { $("status").textContent = "Couldn't finish the checks: " + e.message; }
 }
+let findMode = false;
 function pick(found, label) {
   $("status").textContent = label;
   const p = $("picker"); p.hidden = false; p.innerHTML = "";
@@ -740,7 +742,7 @@ function pick(found, label) {
     const P = plan(), nb = estBldgs(a.LU_ACRES, P);
     const perAc = !a.LANDVALUE ? "" : P.flex ? ` · about ${nb} bldg${nb === 1 ? "" : "s"} · ${money(a.LANDVALUE / nb)} land per bldg` : a.LU_ACRES ? ` · ${money(a.LANDVALUE / a.LU_ACRES)}/ac` : "";
     b.textContent = `${a.ADDRESS ? title(a.ADDRESS) : "No address"} · ${title(a.COUNTY)} · ${(a.LU_ACRES||0).toFixed(2)} ac · land ${money(a.LANDVALUE)}${perAc}`;
-    b.addEventListener("click", () => run(f)); p.appendChild(b); });
+    b.addEventListener("click", () => run(f, findMode)); p.appendChild(b); });
 }
 $("form").addEventListener("submit", async e => {
   e.preventDefault();
@@ -751,6 +753,7 @@ $("form").addEventListener("submit", async e => {
   try {
     const found = await findParcels(inp, $("county").value);
     if (!found.length) { $("status").textContent = "No parcel found. Try the parcel ID from the county record, or a map point (lat, long)."; return; }
+    findMode = false;
     if (found.length === 1) return await run(found[0]);
     pick(found, `${found.length} parcels match. Pick one:`);
   } catch (err) { $("status").textContent = "Lookup failed: " + err.message; }
@@ -762,7 +765,7 @@ $("find").addEventListener("click", async () => {
   try {
     const fs = await findSites(plan(), $("county").value);
     if (!fs.length) $("status").textContent = "No parcels matched. Try another county, or fewer buildings.";
-    else pick(fs, `${fs.length} parcels found${fs.length > 40 ? ", showing the 40 cheapest" : ""}, cheapest land per ${mode === "flex" ? "building (by acreage)" : "acre"} first. Tap one to run the lidar count:`);
+    else { findMode = true; pick(fs, `${fs.length} parcels found${fs.length > 40 ? ", showing the 40 cheapest" : ""}, cheapest land per ${mode === "flex" ? "building (by acreage)" : "acre"} first. Tap one to run the lidar count (it uses the county land value, not the asking price box):`); }
   } catch (err) { $("status").textContent = "Search failed: " + err.message; }
   finally { $("find").disabled = !live; }
 });
